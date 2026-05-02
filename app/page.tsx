@@ -1,66 +1,91 @@
-import Image from "next/image";
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+
+const POPULAR = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B"];
 
 export default function Home() {
+  const router = useRouter();
+  const [ticker, setTicker] = useState("");
+
+  function go(sym: string) {
+    const s = sym.trim().toUpperCase();
+    if (s) router.push(`/stock?ticker=${encodeURIComponent(s)}`);
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    go(ticker);
+  }
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xl text-4xl font-semibold mt-20 leading-10 tracking-tight text-black dark:text-zinc-50">
-            Hello World! 676 76 76 7 67 67 67 67 67. Alex N. loves Bhavdeep S. teot®
-            Samuel L.  Rayan D.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to Pravir R.{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-[#0a0a0a] flex flex-col items-center justify-center px-4">
+      {/* Hero */}
+      <div className="text-center mb-12 max-w-2xl">
+        <div className="inline-flex items-center gap-2 bg-emerald-950/60 border border-emerald-800/50 rounded-full px-4 py-1.5 text-emerald-400 text-xs font-medium mb-6 tracking-wide">
+          ● LIVE DATA FROM SEC EDGAR & YAHOO FINANCE
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+        <h1 className="text-5xl font-bold text-white tracking-tight mb-4 leading-tight">
+          Find<span className="text-emerald-400">Quan</span>
+        </h1>
+        <p className="text-lg text-zinc-400 leading-relaxed">
+          Institutional-grade financial analysis for long-term investors.<br />
+          Revenue trends, earnings growth, valuation zones, and dilution alerts.
+        </p>
+      </div>
+
+      {/* Search */}
+      <form onSubmit={handleSubmit} className="w-full max-w-lg mb-8">
+        <div className="flex gap-2">
+          <input
+            autoFocus
+            value={ticker}
+            onChange={(e) => setTicker(e.target.value.toUpperCase())}
+            placeholder="Enter ticker (AAPL, MSFT, GOOGL…)"
+            className="flex-1 bg-zinc-900 text-white text-base rounded-xl px-4 py-3.5 border border-zinc-700 focus:outline-none focus:border-emerald-500 placeholder:text-zinc-600 uppercase placeholder:normal-case tracking-widest"
+          />
+          <button
+            type="submit"
+            className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl px-6 py-3.5 transition-colors text-sm"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            Analyze →
+          </button>
         </div>
-      </main>
+      </form>
+
+      {/* Popular tickers */}
+      <div className="flex flex-wrap justify-center gap-2 mb-16">
+        <span className="text-zinc-600 text-xs self-center mr-1">Popular:</span>
+        {POPULAR.map((s) => (
+          <button
+            key={s}
+            onClick={() => go(s)}
+            className="text-xs px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 hover:border-zinc-600 transition-all font-mono"
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+
+      {/* Feature grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-3xl w-full text-center">
+        {[
+          { icon: "📈", label: "Revenue & Earnings CAGR" },
+          { icon: "🎯", label: "Valuation Zone" },
+          { icon: "⚠️", label: "Dilution Alerts" },
+          { icon: "📊", label: "7 Interactive Charts" },
+        ].map(({ icon, label }) => (
+          <div key={label} className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-4">
+            <div className="text-2xl mb-2">{icon}</div>
+            <div className="text-xs text-zinc-400">{label}</div>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-12 text-zinc-700 text-xs">
+        Data sourced from SEC EDGAR and Yahoo Finance. Not financial advice.
+      </p>
     </div>
   );
 }

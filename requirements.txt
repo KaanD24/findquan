@@ -1,0 +1,5 @@
+requests>=2.28
+pandas>=1.5
+matplotlib>=3.6
+# optional: seaborn for prettier plots
+seaborn>=0.12
