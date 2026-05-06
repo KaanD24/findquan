@@ -103,8 +103,12 @@ function computeEps(netArr: any[], sharesArr: any[]): any[] {
 function computeMarginPct(numerator: any[], denominator: any[]): any[] {
   if (!numerator.length || !denominator.length) return [];
   return numerator.map(n => {
-    const ny = new Date(n.period).getFullYear();
-    const d = denominator.find(x => new Date(x.period).getFullYear() === ny);
+    // exact period first, year fallback for annual data with slightly different end dates
+    let d = denominator.find(x => x.period === n.period);
+    if (!d) {
+      const ny = new Date(n.period).getFullYear();
+      d = denominator.find(x => new Date(x.period).getFullYear() === ny);
+    }
     if (!d || d.val === 0) return null;
     return { period: n.period, val: (n.val / d.val) * 100 };
   }).filter(Boolean);
@@ -140,6 +144,18 @@ function mergeByYear(arrA: any[], arrB: any[], fn: (a: number, b: number) => num
   return arrA.map(a => {
     const yr = new Date(a.period).getFullYear();
     const b = arrB.find(x => new Date(x.period).getFullYear() === yr);
+    if (!b) return null;
+    return { period: a.period, val: fn(a.val, b.val) };
+  }).filter(Boolean);
+}
+
+function mergeByPeriod(arrA: any[], arrB: any[], fn: (a: number, b: number) => number): any[] {
+  return arrA.map(a => {
+    let b = arrB.find(x => x.period === a.period);
+    if (!b) {
+      const yr = new Date(a.period).getFullYear();
+      b = arrB.find(x => new Date(x.period).getFullYear() === yr);
+    }
     if (!b) return null;
     return { period: a.period, val: fn(a.val, b.val) };
   }).filter(Boolean);
@@ -186,7 +202,7 @@ function filterChartData<T extends { labels: string[]; datasets: any[] }>(
     startIdx = data.labels.findIndex(l => l >= cut);
   } else if (/^\d{4}$/.test(first)) {
     const cutYr = cutoff.getFullYear();
-    startIdx = data.labels.findIndex(l => parseInt(l) > cutYr);
+    startIdx = data.labels.findIndex(l => parseInt(l) >= cutYr);
   } else if (/^Q\d \d{4}$/.test(first)) {
     const cutYr = cutoff.getFullYear();
     const cutQ  = Math.floor(cutoff.getMonth() / 3);
@@ -438,21 +454,28 @@ export default function StockPage() {
       });
 
       if (revJson) {
-        const qs  = revJson.revenue?.quarter   || [];
-        const niQ = revJson.netIncome?.quarter || [];
-        const oiQ = revJson.operatingIncome?.quarter || [];
+        const qs  = revJson.revenue?.quarter            || [];
+        const niQ = revJson.netIncome?.quarter          || [];
+        const oiQ = revJson.operatingIncome?.quarter    || [];
         setRevData({
           annual: revJson.revenue?.annual || [], quarter: qs, ttm: computeTtm(qs),
           netIncomeAnnual: revJson.netIncome?.annual || [], netIncomeQuarter: niQ, netIncomeTtm: computeTtm(niQ),
           oiAnnual: revJson.operatingIncome?.annual || [], oiQuarter: oiQ, oiTtm: computeTtm(oiQ),
           daAnnual: revJson.da?.annual || [], daQuarter: revJson.da?.quarter || [],
-          grossProfitAnnual: revJson.grossProfit?.annual || [],
+          grossProfitAnnual:   revJson.grossProfit?.annual  || [],
+          grossProfitQuarter:  revJson.grossProfit?.quarter || [],
           ocfAnnual: revJson.ocf?.annual || [], ocfQuarter: revJson.ocf?.quarter || [],
           capexAnnual: revJson.capex?.annual || [], capexQuarter: revJson.capex?.quarter || [],
-          cashAnnual:   revJson.cash?.annual   || [],
-          ltDebtAnnual: revJson.ltDebt?.annual || [],
-          stDebtAnnual: revJson.stDebt?.annual || [],
-          shares: revJson.shares || [],
+          cashAnnual:    revJson.cash?.annual    || [],
+          cashQuarter:   revJson.cash?.quarter   || [],
+          ltDebtAnnual:  revJson.ltDebt?.annual  || [],
+          ltDebtQuarter: revJson.ltDebt?.quarter || [],
+          stDebtAnnual:  revJson.stDebt?.annual  || [],
+          stDebtQuarter: revJson.stDebt?.quarter || [],
+          // shares.all = every deduped entry; annual/quarter for display charts
+          shares:        revJson.shares?.all     || revJson.shares || [],
+          sharesAnnual:  revJson.shares?.annual  || [],
+          sharesQuarter: revJson.shares?.quarter || [],
         });
       }
 
@@ -484,28 +507,44 @@ export default function StockPage() {
   }
 
   // ─── derived series ──────────────────────────────────────────────────────────
-  const revArr    = useMemo(() => sortedByPeriod(revData?.annual           || []), [revData]);
-  const netArr    = useMemo(() => sortedByPeriod(revData?.netIncomeAnnual  || []), [revData]);
-  const oiArr     = useMemo(() => sortedByPeriod(revData?.oiAnnual         || []), [revData]);
+  const revArr    = useMemo(() => sortedByPeriod(revData?.annual            || []), [revData]);
+  const netArr    = useMemo(() => sortedByPeriod(revData?.netIncomeAnnual   || []), [revData]);
+  const oiArr     = useMemo(() => sortedByPeriod(revData?.oiAnnual          || []), [revData]);
   const gpArr     = useMemo(() => sortedByPeriod(revData?.grossProfitAnnual || []), [revData]);
-  const ocfArr    = useMemo(() => sortedByPeriod(revData?.ocfAnnual        || []), [revData]);
-  const capexArr  = useMemo(() => sortedByPeriod(revData?.capexAnnual      || []), [revData]);
-  const sharesArr = useMemo(() => sortedByPeriod(revData?.shares           || []), [revData]);
-  const rawEpsArr = useMemo(() => computeEps(netArr, sharesArr), [netArr, sharesArr]);
+  const ocfArr    = useMemo(() => sortedByPeriod(revData?.ocfAnnual         || []), [revData]);
+  const capexArr  = useMemo(() => sortedByPeriod(revData?.capexAnnual       || []), [revData]);
 
-  // Split-adjusted shares and EPS
-  const splitAdjSharesArr = useMemo(() => {
-    if (!sharesArr.length || !splits.length) return sharesArr;
-    return sharesArr.map(s => ({ ...s, val: s.val * getCumulativeSplitFactor(s.period, splits) }));
-  }, [sharesArr, splits]);
+  // sharesArr = full flat list (used for EPS computation — most coverage)
+  const sharesArr        = useMemo(() => sortedByPeriod(revData?.shares        || []), [revData]);
+  const sharesAnnualArr  = useMemo(() => sortedByPeriod(revData?.sharesAnnual  || []), [revData]);
+  const sharesQuarterArr = useMemo(() => sortedByPeriod(revData?.sharesQuarter || []), [revData]);
 
-  const splitAdjEpsArr = useMemo(() => {
-    if (!rawEpsArr.length || !splits.length) return rawEpsArr;
-    return rawEpsArr.map((e: any) => {
-      const f = getCumulativeSplitFactor(e.period, splits);
-      return { ...e, val: e.val / f };
-    });
-  }, [rawEpsArr, splits]);
+  // Split-adjusted versions of all three
+  const adjShares = useCallback((arr: any[]) => arr.map(s => ({
+    ...s, val: s.val * getCumulativeSplitFactor(s.period, splits),
+  })), [splits]);
+
+  const splitAdjSharesArr        = useMemo(() => adjShares(sharesArr),        [sharesArr,        adjShares]);
+  const splitAdjSharesAnnualArr  = useMemo(() => adjShares(sharesAnnualArr),  [sharesAnnualArr,  adjShares]);
+  const splitAdjSharesQuarterArr = useMemo(() => adjShares(sharesQuarterArr), [sharesQuarterArr, adjShares]);
+
+  // Active display shares (for chart — respects period toggle)
+  const activeSharesDisplay = useMemo(() => {
+    if (period === "quarterly") return splitAdjSharesQuarterArr.length ? splitAdjSharesQuarterArr : splitAdjSharesArr;
+    return splitAdjSharesAnnualArr.length ? splitAdjSharesAnnualArr : splitAdjSharesArr;
+  }, [period, splitAdjSharesAnnualArr, splitAdjSharesQuarterArr, splitAdjSharesArr]);
+
+  // Annual EPS (split-adjusted) — used for daily P/E line
+  const splitAdjEpsArr = useMemo(
+    () => computeEps(netArr, splitAdjSharesArr),
+    [netArr, splitAdjSharesArr],
+  );
+
+  // Quarterly EPS (split-adjusted)
+  const splitAdjEpsQArr = useMemo(() => {
+    const qNet = sortedByPeriod(revData?.netIncomeQuarter || []);
+    return computeEps(qNet, splitAdjSharesArr);
+  }, [revData, splitAdjSharesArr]);
 
   const ebitdaArr      = useMemo(() => mergeEbitda(oiArr, sortedByPeriod(revData?.daAnnual || [])), [oiArr, revData]);
   const grossMarginArr = useMemo(() => computeMarginPct(gpArr,  revArr), [gpArr, revArr]);
@@ -513,15 +552,29 @@ export default function StockPage() {
   const netMarginArr   = useMemo(() => computeMarginPct(netArr, revArr), [netArr, revArr]);
   const fcfArr         = useMemo(() => computeFcf(ocfArr, capexArr), [ocfArr, capexArr]);
 
-  // Balance sheet: cash and total debt (LT + ST) by year
+  // Balance sheet: annual
   const cashArr   = useMemo(() => sortedByPeriod(revData?.cashAnnual   || []), [revData]);
   const ltDebtArr = useMemo(() => sortedByPeriod(revData?.ltDebtAnnual || []), [revData]);
   const stDebtArr = useMemo(() => sortedByPeriod(revData?.stDebtAnnual || []), [revData]);
-  const totalDebtArr = useMemo(() =>
-    mergeByYear(ltDebtArr, stDebtArr, (a, b) => a + b).length
-      ? mergeByYear(ltDebtArr, stDebtArr, (a, b) => a + b)
-      : ltDebtArr,
-    [ltDebtArr, stDebtArr]);
+  const totalDebtArr = useMemo(() => {
+    const merged = mergeByYear(ltDebtArr, stDebtArr, (a, b) => a + b);
+    return merged.length ? merged : ltDebtArr;
+  }, [ltDebtArr, stDebtArr]);
+
+  // Balance sheet: quarterly + active (period-aware)
+  const cashQArr    = useMemo(() => sortedByPeriod(revData?.cashQuarter   || []), [revData]);
+  const ltDebtQArr  = useMemo(() => sortedByPeriod(revData?.ltDebtQuarter || []), [revData]);
+  const stDebtQArr  = useMemo(() => sortedByPeriod(revData?.stDebtQuarter || []), [revData]);
+  const totalDebtQArr = useMemo(() => {
+    const merged = mergeByPeriod(ltDebtQArr, stDebtQArr, (a, b) => a + b);
+    return merged.length ? merged : ltDebtQArr;
+  }, [ltDebtQArr, stDebtQArr]);
+  const activeCashArr      = useMemo(() =>
+    period === "quarterly" && cashQArr.length      ? cashQArr      : cashArr,
+    [period, cashArr, cashQArr]);
+  const activeTotalDebtArr = useMemo(() =>
+    period === "quarterly" && totalDebtQArr.length ? totalDebtQArr : totalDebtArr,
+    [period, totalDebtArr, totalDebtQArr]);
 
   // Continuous daily P/E: price / split-adjusted annual EPS (staircase EPS)
   const dailyPeSeries = useMemo(() => {
@@ -656,64 +709,89 @@ export default function StockPage() {
     };
   }, [dailyPeSeries, peStats]);
 
-  // Split-adjusted EPS bar
+  // EPS bar — period-aware (quarterly or annual)
   const epsData = useMemo(() => {
-    if (!splitAdjEpsArr.length) return null;
-    const vals = splitAdjEpsArr.map((e: any) => e.val);
-    return { labels: splitAdjEpsArr.map((e: any) => yearLabel(e.period)),
+    const arr = period === "quarterly" ? splitAdjEpsQArr : splitAdjEpsArr;
+    if (!arr.length) return null;
+    const vals = arr.map((e: any) => e.val);
+    return {
+      labels: arr.map((e: any) => pLabel(e.period)),
       datasets: [{ label: "EPS (adj)", data: vals,
         backgroundColor: barBg(vals, "rgba(245,158,11,0.75)", "rgba(239,68,68,0.75)"),
         borderColor:     barBg(vals, "rgba(245,158,11,1)",    "rgba(239,68,68,1)"),
-        borderWidth: 1, borderRadius: 3 }] };
-  }, [splitAdjEpsArr]);
+        borderWidth: 1, borderRadius: 3 }],
+    };
+  }, [period, splitAdjEpsArr, splitAdjEpsQArr]); // eslint-disable-line
 
-  // Margins 3-line
+  // Margins 3-line — period-aware
   const marginsData = useMemo(() => {
-    if (!revArr.length) return null;
-    const getVal = (arr: any[], yr: number) => arr.find(x => new Date(x.period).getFullYear() === yr)?.val ?? null;
-    const years  = revArr.map(r => new Date(r.period).getFullYear());
-    const gVals  = years.map(y => getVal(grossMarginArr, y));
-    const oVals  = years.map(y => getVal(opMarginArr, y));
-    const nVals  = years.map(y => getVal(netMarginArr, y));
-    if (![...gVals,...oVals,...nVals].some(v => v !== null)) return null;
+    const isQ   = period === "quarterly";
+    const baseArr = isQ ? sortedByPeriod(revData?.quarter || []) : revArr;
+    if (!baseArr.length) return null;
+
+    let gArr: any[], oArr: any[], nArr: any[];
+    if (isQ) {
+      const qRev = sortedByPeriod(revData?.quarter             || []);
+      const qGp  = sortedByPeriod(revData?.grossProfitQuarter  || []);
+      const qOi  = sortedByPeriod(revData?.oiQuarter           || []);
+      const qNet = sortedByPeriod(revData?.netIncomeQuarter     || []);
+      gArr = computeMarginPct(qGp,  qRev);
+      oArr = computeMarginPct(qOi,  qRev);
+      nArr = computeMarginPct(qNet, qRev);
+    } else {
+      gArr = grossMarginArr;
+      oArr = opMarginArr;
+      nArr = netMarginArr;
+    }
+
+    const getVal = (a: any[], p: string) => a.find(x => x.period === p)?.val ?? null;
+    const gVals = baseArr.map(r => getVal(gArr, r.period));
+    const oVals = baseArr.map(r => getVal(oArr, r.period));
+    const nVals = baseArr.map(r => getVal(nArr, r.period));
+    if (![...gVals, ...oVals, ...nVals].some(v => v !== null)) return null;
+
     return {
-      labels: revArr.map(r => yearLabel(r.period)),
+      labels: baseArr.map(r => pLabel(r.period)),
       datasets: [
         { label: "Gross",     data: gVals, borderColor: "#22c55e", backgroundColor: "rgba(34,197,94,0.07)",  fill: false, tension: 0.3, borderWidth: 1.5, pointRadius: 2, spanGaps: true },
-        { label: "Operating", data: oVals, borderColor: "#3b82f6", backgroundColor: "transparent", fill: false, tension: 0.3, borderWidth: 1.5, pointRadius: 2, spanGaps: true },
-        { label: "Net",       data: nVals, borderColor: "#f59e0b", backgroundColor: "transparent", fill: false, tension: 0.3, borderWidth: 1.5, pointRadius: 2, spanGaps: true },
+        { label: "Operating", data: oVals, borderColor: "#3b82f6", backgroundColor: "transparent",           fill: false, tension: 0.3, borderWidth: 1.5, pointRadius: 2, spanGaps: true },
+        { label: "Net",       data: nVals, borderColor: "#f59e0b", backgroundColor: "transparent",           fill: false, tension: 0.3, borderWidth: 1.5, pointRadius: 2, spanGaps: true },
       ],
     };
-  }, [revArr, grossMarginArr, opMarginArr, netMarginArr]);
+  }, [period, revArr, revData, grossMarginArr, opMarginArr, netMarginArr]); // eslint-disable-line
 
-  // Split-adjusted shares bar
+  // Split-adjusted shares bar — period-aware
   const sharesData = useMemo(() => {
-    if (!splitAdjSharesArr.length) return null;
-    const vals = splitAdjSharesArr.map(s => s.val / 1e9);
+    const arr = activeSharesDisplay;
+    if (!arr.length) return null;
+    const vals = arr.map(s => s.val / 1e9);
     const col  = dilutionRate != null && dilutionRate < 0
       ? { bg: "rgba(34,197,94,0.75)",  b: "rgba(34,197,94,1)" }
       : { bg: "rgba(249,115,22,0.75)", b: "rgba(249,115,22,1)" };
-    return { labels: splitAdjSharesArr.map(s => yearLabel(s.period)),
-      datasets: [{ label: "Shares (adj)", data: vals, backgroundColor: col.bg, borderColor: col.b, borderWidth: 1, borderRadius: 3 }] };
-  }, [splitAdjSharesArr, dilutionRate]);
+    return {
+      labels: arr.map(s => pLabel(s.period)),
+      datasets: [{ label: "Shares (adj)", data: vals, backgroundColor: col.bg, borderColor: col.b, borderWidth: 1, borderRadius: 3 }],
+    };
+  }, [activeSharesDisplay, dilutionRate, period]); // eslint-disable-line
 
-  // Balance sheet
+  // Balance sheet — period-aware
   const balanceData = useMemo(() => {
-    if (!cashArr.length && !totalDebtArr.length) return null;
-    const base = cashArr.length ? cashArr : totalDebtArr;
-    const years = base.map(r => new Date(r.period).getFullYear());
-    const labels = base.map(r => yearLabel(r.period));
-    const getY = (arr: any[], yr: number) => (arr.find(x => new Date(x.period).getFullYear() === yr)?.val ?? null);
+    const cArr = activeCashArr;
+    const dArr = activeTotalDebtArr;
+    if (!cArr.length && !dArr.length) return null;
+    const base   = cArr.length ? cArr : dArr;
+    const labels = base.map(r => pLabel(r.period));
+    const getV   = (arr: any[], p: string) => arr.find(x => x.period === p)?.val ?? null;
     return {
       labels,
       datasets: [
-        { label: "Cash & Equiv.", data: years.map(y => { const v = getY(cashArr, y); return v != null ? v/1e9 : null; }),
+        { label: "Cash & Equiv.", data: base.map(r => { const v = getV(cArr, r.period); return v != null ? v/1e9 : null; }),
           backgroundColor: "rgba(34,197,94,0.75)", borderColor: "rgba(34,197,94,1)", borderWidth: 1, borderRadius: 3 },
-        { label: "Total Debt",    data: years.map(y => { const v = getY(totalDebtArr, y); return v != null ? v/1e9 : null; }),
+        { label: "Total Debt",    data: base.map(r => { const v = getV(dArr, r.period); return v != null ? v/1e9 : null; }),
           backgroundColor: "rgba(239,68,68,0.75)",  borderColor: "rgba(239,68,68,1)",  borderWidth: 1, borderRadius: 3 },
       ],
     };
-  }, [cashArr, totalDebtArr]);
+  }, [activeCashArr, activeTotalDebtArr, period]); // eslint-disable-line
 
   // Revenue by segment (stacked bar, toggleable)
   const segmentChartData = useMemo(() => {

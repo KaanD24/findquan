@@ -169,7 +169,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       symbol,
       segments: segments.slice(0, 10),
-      kpis:     kpis.slice(0, 8),
+      kpis:     kpis.slice(0, 14),
     });
   } catch (err: any) {
     console.error('Error in /api/kpi:', err);
