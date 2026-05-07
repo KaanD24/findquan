@@ -113,16 +113,71 @@ function periodDays(e: any): number {
 function isAnnual(e: any): boolean {
   const d = periodDays(e);
   if (d > 0) return d >= 330 && d <= 400;
-  return e.fp === 'FY';
+  if (e.fp === 'FY') return true;
+  // Some filings omit fp but identify via form type
+  if (e.form && (e.form === '10-K' || e.form.startsWith('10-K'))) return true;
+  return false;
 }
 
 function isQuarterly(e: any): boolean {
   const d = periodDays(e);
   if (d > 0) return d >= 60 && d <= 120;
-  return e.fp === 'Q1' || e.fp === 'Q2' || e.fp === 'Q3' || e.fp === 'Q4';
+  if (['Q1','Q2','Q3','Q4'].includes(e.fp)) return true;
+  if (e.form && (e.form === '10-Q' || e.form.startsWith('10-Q'))) return true;
+  return false;
 }
 
 interface ConceptSeries { annual: any[]; quarter: any[] }
+
+// Cash-flow items (OCF, CAPEX) are filed as cumulative YTD in 10-Qs:
+//   Q1 filing  = 90-day period   (standalone Q1 already)
+//   Q2 filing  = 180-day period  (Q1+Q2 cumulative)
+//   Q3 filing  = 270-day period  (Q1+Q2+Q3 cumulative)
+//   Annual     = 365-day period
+// We collect all durations from one fiscal-year start date and diff them
+// to produce standalone quarterly values.
+function extractCashFlowQuarters(entries: any[]): any[] {
+  const dur = entries.filter(e => e.start && e.end && e.end > e.start);
+  if (!dur.length) return [];
+
+  // Dedupe by (start, end) pair — keep most-recently-filed version
+  const pairMap = new Map<string, any>();
+  for (const e of dur) {
+    const key = `${e.start}|${e.end}`;
+    const prev = pairMap.get(key);
+    if (!prev || (e.filed || '') > (prev.filed || '')) pairMap.set(key, e);
+  }
+
+  // Group by fiscal-year start date
+  const byStart = new Map<string, any[]>();
+  for (const e of pairMap.values()) {
+    if (!byStart.has(e.start)) byStart.set(e.start, []);
+    byStart.get(e.start)!.push(e);
+  }
+
+  const result: any[] = [];
+
+  for (const periodEntries of byStart.values()) {
+    const sorted = periodEntries.sort((a, b) => periodDays(a) - periodDays(b));
+
+    const find = (lo: number, hi: number) =>
+      sorted.find(e => { const d = periodDays(e); return d >= lo && d <= hi; });
+
+    const q1 = find(75,  115);  // ~90d
+    const q2 = find(155, 205);  // ~180d
+    const q3 = find(235, 300);  // ~270d
+    const fy = find(330, 400);  // ~365d
+
+    // Standalone = cumulative[n] - cumulative[n-1]
+    if (q1)       result.push({ ...q1, val: q1.val });
+    if (q2 && q1) result.push({ ...q2, val: q2.val - q1.val });
+    if (q3 && q2) result.push({ ...q3, val: q3.val - q2.val });
+    if (fy && q3) result.push({ ...fy, val: fy.val - q3.val });
+    else if (fy && q2 && !q3) result.push({ ...fy, val: fy.val - q2.val });
+  }
+
+  return dedupeByEnd(result).sort((a, b) => (a.end || '').localeCompare(b.end || ''));
+}
 
 function pickBestConcept(usgaap: any, priorityList: string[]): ConceptSeries {
   const allAnnual: any[] = [];
@@ -190,6 +245,12 @@ export async function GET(request: Request) {
     const da = pickBestConcept(usgaap, DA_PRIORITY);
     const ocf = pickBestConcept(usgaap, OCF_PRIORITY);
     const capex = pickBestConcept(usgaap, CAPEX_PRIORITY);
+
+    // Build standalone quarterly OCF/CAPEX from cumulative YTD filings
+    const ocfAllEntries   = OCF_PRIORITY.flatMap(c => getUnitEntries(usgaap, c));
+    const capexAllEntries = CAPEX_PRIORITY.flatMap(c => getUnitEntries(usgaap, c));
+    const ocfQStandalone   = norm(extractCashFlowQuarters(ocfAllEntries));
+    const capexQStandalone = norm(extractCashFlowQuarters(capexAllEntries));
     const cash    = pickBestConcept(usgaap, CASH_PRIORITY);
     const ltDebt  = pickBestConcept(usgaap, LT_DEBT_PRIORITY);
     const stDebt  = pickBestConcept(usgaap, ST_DEBT_PRIORITY);
@@ -233,8 +294,8 @@ export async function GET(request: Request) {
       operatingIncome: { annual: norm(operatingIncome.annual), quarter: norm(operatingIncome.quarter) },
       da:              { annual: norm(da.annual),              quarter: norm(da.quarter) },
       grossProfit:     { annual: norm(gpAnnual),               quarter: norm(gpQuarter) },
-      ocf:             { annual: norm(ocf.annual),             quarter: norm(ocf.quarter) },
-      capex:           { annual: norm(capex.annual),           quarter: norm(capex.quarter) },
+      ocf:             { annual: norm(ocf.annual),             quarter: ocfQStandalone   },
+      capex:           { annual: norm(capex.annual),           quarter: capexQStandalone },
       cash:            { annual: norm(cash.annual),            quarter: norm(cash.quarter) },
       ltDebt:          { annual: norm(ltDebt.annual),          quarter: norm(ltDebt.quarter) },
       stDebt:          { annual: norm(stDebt.annual),          quarter: norm(stDebt.quarter) },
